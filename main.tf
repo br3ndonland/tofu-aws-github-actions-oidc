@@ -25,6 +25,11 @@ locals {
   github_repos       = { for repo in var.github_repos : lower(replace(repo, "/", "-")) => repo }
   oidc_client_ids    = ["sts.amazonaws.com"]
   oidc_issuer_domain = "token.actions.githubusercontent.com"
+  oidc_provider = (
+    tobool(var.create_oidc_provider)
+    ? aws_iam_openid_connect_provider.github[0]
+    : data.aws_iam_openid_connect_provider.github[0]
+  )
 }
 
 # Fetch TLS certificate thumbprint from OIDC provider
@@ -36,9 +41,14 @@ data "tls_certificate" "github" {
 # Create a single GitHub Actions OIDC provider
 
 resource "aws_iam_openid_connect_provider" "github" {
+  count           = tobool(var.create_oidc_provider) ? 1 : 0
   client_id_list  = local.oidc_client_ids
   thumbprint_list = [data.tls_certificate.github.certificates[0].sha1_fingerprint]
   url             = data.tls_certificate.github.url
+}
+
+data "aws_iam_openid_connect_provider" "github" {
+  count = tobool(var.create_oidc_provider) ? 0 : 1
 }
 
 # Define resource-based role trust policy for each IAM role
@@ -50,7 +60,7 @@ data "aws_iam_policy_document" "role_trust_policy" {
     actions = ["sts:AssumeRoleWithWebIdentity", "sts:TagSession"]
     principals {
       type        = "Federated"
-      identifiers = [aws_iam_openid_connect_provider.github.arn]
+      identifiers = [local.oidc_provider.arn]
     }
     condition {
       test     = "StringEquals"
